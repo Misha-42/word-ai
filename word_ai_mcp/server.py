@@ -228,6 +228,30 @@ class WordAiMcpServer:
     def _python_result(result: Any, detail: JSON | None = None) -> Any:
         return mark_python_result(result, detail)
 
+    @staticmethod
+    def _with_precondition_verdict(docx_path: str, args: JSON, result: JSON) -> JSON:
+        """Add the precondition verdict the .NET assessment does not compute.
+
+        The .NET backend resolves every target but never compares `expected_old_*`
+        against it: it answers `ok: true, risks: []` for an `expected_old_sha256`
+        of all zeroes, and for a table's `xml_sha256` - which `docx_list_tables`
+        offers right beside the `text_sha256` a precondition actually needs -
+        while its own write path goes on to refuse that very edit. Assessment
+        blessing an edit the writer rejects is the worst answer this tool can
+        give, and the .NET engine ships prebuilt, so the verdict from
+        `assess_patchset` (the same call the write path makes) is merged in here.
+        """
+        try:
+            reference = assess_patchset(docx_path, args["patchset"])
+        except Exception:
+            return result
+        mismatches = [risk for risk in reference.get("risks", []) if risk.get("code") == "precondition_mismatch"]
+        if not mismatches:
+            return result
+        risks = list(result.get("risks") or []) + mismatches
+        return {**result, "risks": risks, "ok": False, "precondition_verdict": "mismatch"}
+
+
     def list_tools(self) -> list[JSON]:
         strp = {"type": "string"}
         intp = {"type": "integer", "minimum": 1}
@@ -444,14 +468,14 @@ class WordAiMcpServer:
         docx_path = self._resolve_path(args["docx_path"])
         engine, detail = self._offline_engine(args)
         if engine == "dotnet":
-            return dotnet_assess_patchset(docx_path, args["patchset"])
+            return self._with_precondition_verdict(docx_path, args, dotnet_assess_patchset(docx_path, args["patchset"]))
         return self._python_result(assess_patchset(docx_path, args["patchset"]), detail)
 
     def tool_docx_plan_patchset(self, args: JSON) -> Any:
         docx_path = self._resolve_path(args["docx_path"])
         engine, detail = self._offline_engine(args)
         if engine == "dotnet":
-            return dotnet_assess_patchset(docx_path, args["patchset"])
+            return self._with_precondition_verdict(docx_path, args, dotnet_assess_patchset(docx_path, args["patchset"]))
         return self._python_result(plan_patchset(docx_path, args["patchset"]), detail)
 
     def tool_docx_preflight_patchset(self, args: JSON) -> Any:

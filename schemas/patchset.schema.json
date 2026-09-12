@@ -127,7 +127,8 @@
           "type": "string"
         },
         "expected_old_sha256": {
-          "type": "string"
+          "type": "string",
+          "description": "SHA-256 of the target's *text* as it is now, from the matching text_sha256 field of the read/list tool. A table's xml_sha256 does not satisfy this precondition."
         }
       },
       "required": [
@@ -153,7 +154,8 @@
           "type": "string"
         },
         "expected_old_sha256": {
-          "type": "string"
+          "type": "string",
+          "description": "SHA-256 of the target's *text* as it is now, from the matching text_sha256 field of the read/list tool. A table's xml_sha256 does not satisfy this precondition."
         }
       },
       "required": [
@@ -179,7 +181,8 @@
           "type": "string"
         },
         "expected_old_sha256": {
-          "type": "string"
+          "type": "string",
+          "description": "SHA-256 of the target's *text* as it is now, from the matching text_sha256 field of the read/list tool. A table's xml_sha256 does not satisfy this precondition."
         }
       },
       "required": [
@@ -220,7 +223,8 @@
           "type": "string"
         },
         "expected_old_sha256": {
-          "type": "string"
+          "type": "string",
+          "description": "SHA-256 of the target's *text* as it is now, from the matching text_sha256 field of the read/list tool. A table's xml_sha256 does not satisfy this precondition."
         }
       },
       "required": [
@@ -268,7 +272,8 @@
           "type": "string"
         },
         "expected_old_sha256": {
-          "type": "string"
+          "type": "string",
+          "description": "SHA-256 of the target's *text* as it is now, from the matching text_sha256 field of the read/list tool. A table's xml_sha256 does not satisfy this precondition."
         }
       },
       "required": [
@@ -337,7 +342,8 @@
           "type": "string"
         },
         "expected_old_sha256": {
-          "type": "string"
+          "type": "string",
+          "description": "SHA-256 of the target's *text* as it is now, from the matching text_sha256 field of the read/list tool. A table's xml_sha256 does not satisfy this precondition."
         }
       },
       "required": [
@@ -406,7 +412,8 @@
           "type": "string"
         },
         "expected_old_sha256": {
-          "type": "string"
+          "type": "string",
+          "description": "SHA-256 of the target's *text* as it is now, from the matching text_sha256 field of the read/list tool. A table's xml_sha256 does not satisfy this precondition."
         }
       },
       "required": [
@@ -482,7 +489,8 @@
           "type": "string"
         },
         "expected_old_sha256": {
-          "type": "string"
+          "type": "string",
+          "description": "SHA-256 of the target's *text* as it is now, from the matching text_sha256 field of the read/list tool. A table's xml_sha256 does not satisfy this precondition."
         }
       },
       "required": [
@@ -522,7 +530,8 @@
           "type": "string"
         },
         "expected_old_sha256": {
-          "type": "string"
+          "type": "string",
+          "description": "SHA-256 of the target's *text* as it is now, from the matching text_sha256 field of the read/list tool. A table's xml_sha256 does not satisfy this precondition."
         }
       },
       "required": [
@@ -568,7 +577,8 @@
           "type": "string"
         },
         "expected_old_sha256": {
-          "type": "string"
+          "type": "string",
+          "description": "SHA-256 of the target's *text* as it is now, from the matching text_sha256 field of the read/list tool. A table's xml_sha256 does not satisfy this precondition."
         }
       },
       "required": [
@@ -635,7 +645,8 @@
           "type": "string"
         },
         "expected_old_sha256": {
-          "type": "string"
+          "type": "string",
+          "description": "SHA-256 of the target's *text* as it is now, from the matching text_sha256 field of the read/list tool. A table's xml_sha256 does not satisfy this precondition."
         }
       },
       "required": [

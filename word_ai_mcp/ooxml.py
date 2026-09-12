@@ -461,6 +461,23 @@ def _assert_expected_text(actual: str, expected_text: str | None = None, expecte
         raise ValueError(f"{label}: expected_sha256 does not match current text")
 
 
+def _precondition_risk(index: int, actual: str, op: dict[str, Any], label: str) -> dict[str, Any] | None:
+    """Report a precondition that cannot hold, through the check apply itself runs.
+
+    Assessment already resolves every target, so a precondition it accepts but
+    never verifies is worse than no assessment at all: it reported `ok: true`
+    for a PatchSet the write path was certain to refuse - even for a
+    `expected_old_sha256` of all zeroes. Comparing via `_assert_expected_text`,
+    the same call the write path makes, is what keeps the two from drifting
+    apart again.
+    """
+    try:
+        _assert_expected_text(actual, op.get("expected_old_text"), op.get("expected_old_sha256"), label)
+    except ValueError as exc:
+        return {"severity": "error", "operation_index": index, "code": "precondition_mismatch", "message": str(exc)}
+    return None
+
+
 def inspect_docx(docx_path: str | Path, include_text: bool = False, max_preview: int = 240) -> dict[str, Any]:
     docx_path = Path(docx_path)
     tree = load_document_tree(docx_path)
@@ -1249,6 +1266,48 @@ def _target_paragraph_from_op(root: etree._Element, op: dict[str, Any]) -> etree
     return p
 
 
+def resolve_paraid_targets(docx_path: str | Path, patchset: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite `paraId` paragraph anchors into `paragraph_index`.
+
+    The prebuilt .NET engine cannot resolve a `w14:paraId` write target: it fails
+    with `target_resolution_failed: Target paragraph not found` for an id the
+    Python engine resolves without complaint, and even for a paragraph the caller
+    located by index and the engine itself reports back in `touched.para_ids`.
+    The .NET engine cannot be rebuilt here, so the facade translates the anchor
+    to the axis that engine does accept: the same 1-based `//w:body//w:p` index
+    `list_paragraphs` hands out.
+
+    `paraId` is the more precise anchor - an index shifts when content is
+    inserted earlier in the body - so it is resolved against the source document
+    rather than discarded. When an operation carries both axes the id wins, which
+    is what the Python engine already does. An id that cannot be found is left
+    alone, so the engine reports the missing target itself.
+    """
+    operations = patchset.get("operations")
+    if not isinstance(operations, list):
+        return patchset
+    if not any(isinstance(op, dict) and op.get("paraId") for op in operations):
+        return patchset
+
+    root = load_document_tree(docx_path).getroot()
+    resolved: list[Any] = []
+    translated = False
+    for op in operations:
+        if not isinstance(op, dict) or not op.get("paraId"):
+            resolved.append(op)
+            continue
+        paragraph = _find_paragraph(root, para_id=op["paraId"])
+        index = _paragraph_global_index(root, paragraph) if paragraph is not None else None
+        if index is None:
+            resolved.append(op)
+            continue
+        resolved.append({key: value for key, value in op.items() if key != "paraId"} | {"paragraph_index": index})
+        translated = True
+    if not translated:
+        return patchset
+    return {**patchset, "operations": resolved}
+
+
 def _wrap_paragraph_with_sdt(p: etree._Element, tag: str, alias: str | None = None, lock: bool = True) -> etree._Element:
     parent = p.getparent()
     if parent is None:
@@ -1312,6 +1371,10 @@ def assess_patchset(docx_path: str | Path, patchset: dict[str, Any]) -> dict[str
                     requires_structural_change = True
                 if op.get("expected_old_text") is None and op.get("expected_old_sha256") is None:
                     risks.append({"severity": "error" if require_preconditions else "warning", "operation_index": idx, "code": "missing_precondition", "message": "No expected_old_text/expected_old_sha256 supplied; concurrent edits may be missed."})
+                else:
+                    risk = _precondition_risk(idx, get_content_control_text_from_tree(sdt), op, f"operation {idx} content control {tag}")
+                    if risk:
+                        risks.append(risk)
             elif typ in {"replace_paragraph_text", "insert_paragraph_after", "insert_paragraph_before", "add_comment", "wrap_paragraph_with_content_control"}:
                 p = _target_paragraph_from_op(root, op)
                 pid = p.get(qn("w14:paraId"))
@@ -1333,6 +1396,13 @@ def assess_patchset(docx_path: str | Path, patchset: dict[str, Any]) -> dict[str
                     risks.append({"severity": "error", "operation_index": idx, "code": "complex_paragraph", "message": "Target paragraph contains complex Word objects."})
                 if op.get("expected_old_text") is None and op.get("expected_old_sha256") is None:
                     risks.append({"severity": "error" if require_preconditions or typ in HIGH_RISK_OPS else "warning", "operation_index": idx, "code": "missing_precondition", "message": "No expected_old_text/expected_old_sha256 supplied for paragraph-scoped operation."})
+                else:
+                    # Same label the write path uses, so an assessment and an
+                    # apply failure read identically.
+                    where = "anchor paragraph" if typ.startswith("insert_") else "paragraph"
+                    risk = _precondition_risk(idx, paragraph_text(p), op, f"operation {idx} {where}")
+                    if risk:
+                        risks.append(risk)
             elif typ in {"replace_table_cell_text", "append_table_row"}:
                 scope_tag = op.get("scope_tag")
                 tables = _tables_in_scope(root, scope_tag)
@@ -1354,6 +1424,15 @@ def assess_patchset(docx_path: str | Path, patchset: dict[str, Any]) -> dict[str
                 if op.get("expected_old_text") is None and op.get("expected_old_sha256") is None:
                     target = "table" if typ == "append_table_row" else "table cell"
                     risks.append({"severity": "error" if require_preconditions or typ in HIGH_RISK_OPS else "warning", "operation_index": idx, "code": "missing_precondition", "message": f"No expected_old_text/expected_old_sha256 supplied for {target} operation."})
+                else:
+                    # expected_old_sha256 hashes the target's text, so the listing's
+                    # xml_sha256 - which is also offered per table - cannot satisfy it.
+                    if typ == "append_table_row":
+                        risk = _precondition_risk(idx, _table_text(tbl), op, f"operation {idx} table")
+                    else:
+                        risk = _precondition_risk(idx, _cell_text(_table_cell(tbl, int(op.get("row", 1)), int(op.get("col", 1)))), op, f"operation {idx} table cell")
+                    if risk:
+                        risks.append(risk)
             else:
                 risks.append({"severity": "error", "operation_index": idx, "code": "unsupported_op", "message": f"Unsupported op: {typ}"})
         except Exception as exc:

@@ -36,6 +36,8 @@ jobs:
           PYTHONPATH=. python scripts/run_outline_regression.py
           PYTHONPATH=. python scripts/run_stdio_encoding_regression.py
           PYTHONPATH=. python scripts/run_validation_isolation_regression.py
+          PYTHONPATH=. python scripts/run_paraid_target_regression.py
+          PYTHONPATH=. python scripts/run_precondition_assessment_regression.py
           PYTHONPATH=. python scripts/run_word_session_smoke.py
           PYTHONPATH=. python scripts/validate_word_ai_skill.py
           PYTHONPATH=. python - <<'PY'

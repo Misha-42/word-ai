@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .ooxml import resolve_paraid_targets
 from .patchset import normalize_patchset
 from .resources import runtime_root
 
@@ -245,22 +246,32 @@ def _write_json_temp(data: Any, directory: Path, suffix: str) -> Path:
     return path
 
 
+def _for_dotnet(docx_path: str | Path, patchset: JSON) -> JSON:
+    """Normalise a patchset into the shape the .NET engine can execute.
+
+    Only this engine needs it: `resolve_paraid_targets` translates `paraId`
+    anchors, which the .NET backend cannot resolve, into the paragraph index it
+    can.
+    """
+    return resolve_paraid_targets(docx_path, normalize_patchset(patchset))
+
+
 def dotnet_assess_patchset(docx_path: str | Path, patchset: JSON, *, root: str | Path | None = None) -> JSON:
-    patchset = normalize_patchset(patchset)
+    patchset = _for_dotnet(docx_path, patchset)
     with tempfile.TemporaryDirectory(prefix="word-ai-openxml-") as tmp:
         patch_path = _write_json_temp(patchset, Path(tmp), ".patchset.json")
         return _run_dotnet(["assess", str(docx_path), str(patch_path)], root=root)
 
 
 def dotnet_dry_run_patchset(docx_path: str | Path, patchset: JSON, keep_output: bool = False, *, root: str | Path | None = None) -> JSON:
-    patchset = normalize_patchset(patchset)
+    patchset = _for_dotnet(docx_path, patchset)
     with tempfile.TemporaryDirectory(prefix="word-ai-openxml-") as tmp:
         patch_path = _write_json_temp(patchset, Path(tmp), ".patchset.json")
         return _run_dotnet(["dry-run", str(docx_path), str(patch_path), str(bool(keep_output)).lower()], root=root)
 
 
 def dotnet_apply_patchset(docx_path: str | Path, patchset: JSON, output_path: str | Path | None = None, *, root: str | Path | None = None) -> JSON:
-    patchset = normalize_patchset(patchset)
+    patchset = _for_dotnet(docx_path, patchset)
     target = str(output_path or default_output_path(docx_path))
     with tempfile.TemporaryDirectory(prefix="word-ai-openxml-") as tmp:
         patch_path = _write_json_temp(patchset, Path(tmp), ".patchset.json")
