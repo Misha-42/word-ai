@@ -864,6 +864,25 @@ class WordAiMcpServer:
     def tool_word_session_command_status(self, args: JSON) -> Any:
         return get_command(self.root, args["command_id"])
 
+    def _missing_argument(self, name: str, exc: KeyError) -> str | None:
+        """Name the argument a tool was missing, or None if it was not one.
+
+        Tools read their required arguments as `args["docx_path"]`, so a caller
+        who guesses the parameter name - `path`, say - is answered with
+        `KeyError: 'docx_path'` and a Python traceback, which says nothing about
+        what the tool actually accepts. Returns None when the missing key is not
+        one of the tool's declared required arguments: a KeyError from inside a
+        tool's own data lookup is not the caller's mistake and must keep its
+        original traceback.
+        """
+        missing = exc.args[0] if exc.args else None
+        schema = next((tool.get("inputSchema") or {} for tool in self.list_tools() if tool["name"] == name), {})
+        required = list(schema.get("required") or [])
+        if missing not in required:
+            return None
+        accepts = ", ".join(required) or ", ".join(sorted(schema.get("properties") or {}))
+        return f"{name}: missing required argument {missing!r}; this tool requires: {accepts}"
+
     def handle(self, request: JSON) -> JSON | None:
         method = request.get("method")
         req_id = request.get("id")
@@ -881,7 +900,13 @@ class WordAiMcpServer:
                 arguments = params.get("arguments") or {}
                 if name not in self.tools:
                     raise ValueError(f"Unknown tool: {name}")
-                result = self.tools[name](arguments)
+                try:
+                    result = self.tools[name](arguments)
+                except KeyError as exc:
+                    hint = self._missing_argument(name, exc)
+                    if hint is None:
+                        raise
+                    raise ValueError(hint) from exc
                 return {"jsonrpc": "2.0", "id": req_id, "result": {"content": _text_payload(result), "isError": False}}
             if method == "resources/list":
                 return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": []}}

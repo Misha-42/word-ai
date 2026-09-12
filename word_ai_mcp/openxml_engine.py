@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .ooxml import resolve_paraid_targets
+from .ooxml import dry_run_verdict, resolve_paraid_targets
 from .patchset import normalize_patchset
 from .resources import runtime_root
 
@@ -267,7 +267,7 @@ def dotnet_dry_run_patchset(docx_path: str | Path, patchset: JSON, keep_output: 
     patchset = _for_dotnet(docx_path, patchset)
     with tempfile.TemporaryDirectory(prefix="word-ai-openxml-") as tmp:
         patch_path = _write_json_temp(patchset, Path(tmp), ".patchset.json")
-        return _run_dotnet(["dry-run", str(docx_path), str(patch_path), str(bool(keep_output)).lower()], root=root)
+        return dry_run_verdict(_run_dotnet(["dry-run", str(docx_path), str(patch_path), str(bool(keep_output)).lower()], root=root))
 
 
 def dotnet_apply_patchset(docx_path: str | Path, patchset: JSON, output_path: str | Path | None = None, *, root: str | Path | None = None) -> JSON:

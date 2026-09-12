@@ -1777,6 +1777,23 @@ def get_content_control_text_from_tree(sdt: etree._Element) -> str:
     return "\n".join(paragraphs) if paragraphs else "".join(t.text or "" for t in sdt.xpath(".//w:t", namespaces=NS))
 
 
+def dry_run_verdict(result: dict[str, Any]) -> dict[str, Any]:
+    """Give a dry run the top-level `ok` its sibling tools already return.
+
+    `docx_assess_patchset`, `docx_validate` and `docx_compare_structure` all
+    answer with a top-level `ok`, but a dry run carried its verdict only inside
+    `safety_assessment.ok` and `validation.ok`. A caller that checks
+    `result["ok"]` for the others - as it reasonably does - met a KeyError here,
+    or read a successful dry run as a failure. The verdict is the conjunction:
+    the PatchSet was assessed safe *and* the document it produced validated. An
+    absent sub-verdict counts as not-ok, because an unproven pass is the one
+    answer this tool must never give.
+    """
+    safety = result.get("safety_assessment") or {}
+    validation = result.get("validation") or {}
+    return {**result, "ok": bool(safety.get("ok")) and bool(validation.get("ok"))}
+
+
 def dry_run_patchset(docx_path: str | Path, patchset: dict[str, Any], keep_output: bool = False) -> dict[str, Any]:
     docx_path = Path(docx_path)
     dry_dir = docx_path.parent / ".wordai" / "dryruns"
@@ -1793,7 +1810,7 @@ def dry_run_patchset(docx_path: str | Path, patchset: dict[str, Any], keep_outpu
         except Exception:
             pass
         audit["output_path"] = None
-    return audit
+    return dry_run_verdict(audit)
 
 
 def validate_structure(
