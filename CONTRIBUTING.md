@@ -30,6 +30,7 @@ PYTHONPATH=. .venv/bin/python scripts/run_validation_isolation_regression.py
 PYTHONPATH=. .venv/bin/python scripts/run_paraid_target_regression.py
 PYTHONPATH=. .venv/bin/python scripts/run_precondition_assessment_regression.py
 PYTHONPATH=. .venv/bin/python scripts/run_tool_verdict_regression.py
+PYTHONPATH=. .venv/bin/python scripts/run_e2e_stdio_utf8_regression.py
 PYTHONPATH=. .venv/bin/python scripts/run_word_session_smoke.py
 PYTHONPATH=. .venv/bin/python scripts/validate_word_ai_skill.py
 PYTHONPATH=. .venv/bin/python -m word_ai_mcp.quickstart --root "$PWD" codex-config --output /tmp/word-ai-codex.toml
