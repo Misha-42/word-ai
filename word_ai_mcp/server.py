@@ -758,7 +758,29 @@ class WordAiMcpServer:
             return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32000, "message": str(exc), "data": {"traceback": traceback.format_exc(limit=8)}}}
 
 
+def configure_stdio_utf8() -> None:
+    """Bind the stdio transport to UTF-8 regardless of the process locale.
+
+    MCP stdio is UTF-8, but Python binds sys.stdin/sys.stdout to the locale
+    encoding. On Windows that is the ANSI codepage (cp1251 on a Russian host),
+    so a UTF-8 request decodes as cp1251 into mojibake: non-ASCII arguments are
+    silently corrupted, and read tools return empty results instead of failing.
+    """
+    for stream in (sys.stdin, sys.stdout):
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            # Detached or non-reconfigurable stream; leave it untouched.
+            pass
+
+
 def run_stdio(root: str | None, allow_write: bool, allowed_roots: list[str] | None = None) -> None:
+    configure_stdio_utf8()
     server = WordAiMcpServer(root=root, allow_write=allow_write, allowed_roots=allowed_roots)
     for line in sys.stdin:
         line = line.strip()

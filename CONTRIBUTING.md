@@ -25,6 +25,7 @@ PYTHONPATH=. .venv/bin/python -m compileall word_ai_mcp scripts
 PYTHONPATH=. .venv/bin/python scripts/run_smoke_test.py
 PYTHONPATH=. .venv/bin/python scripts/run_structure_regression.py
 PYTHONPATH=. .venv/bin/python scripts/run_outline_regression.py
+PYTHONPATH=. .venv/bin/python scripts/run_stdio_encoding_regression.py
 PYTHONPATH=. .venv/bin/python scripts/run_word_session_smoke.py
 PYTHONPATH=. .venv/bin/python scripts/validate_word_ai_skill.py
 PYTHONPATH=. .venv/bin/python -m word_ai_mcp.quickstart --root "$PWD" codex-config --output /tmp/word-ai-codex.toml
