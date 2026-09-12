@@ -71,8 +71,19 @@ def _serialize_xml(tree: etree._ElementTree | etree._Element) -> bytes:
 
 
 def _canonical_hash(el: etree._Element) -> str:
+    """Hash an element by its semantic content, not by its serialization.
+
+    Exclusive canonicalisation matters here. Inclusive c14n renders every in-scope
+    namespace declaration, so a part that merely redeclares a namespace - which the
+    .NET backend does, because its XmlWriter hoists drawing namespaces such as
+    xmlns:a or xmlns:pic into ancestor scope - changes the inclusive c14n bytes of
+    every element beneath it. Two documents that differ in one paragraph then appear
+    to differ in all of them, and the isolation checks report protected_paragraph_changed
+    for an edit that changed nothing else. Exclusive c14n renders only the namespaces an
+    element actually uses, so equivalent markup hashes equally no matter how it was written.
+    """
     try:
-        data = etree.tostring(el, method="c14n", with_comments=True)
+        data = etree.tostring(el, method="c14n", exclusive=True, with_comments=True)
     except Exception:
         data = etree.tostring(el, encoding="UTF-8")
     return hashlib.sha256(data).hexdigest()

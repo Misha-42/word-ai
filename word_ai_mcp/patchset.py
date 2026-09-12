@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from typing import Any
 
@@ -61,6 +62,16 @@ def normalize_patchset(patchset: JSON) -> JSON:
     aliases to the official PatchSet schema but does not introduce any new write
     operation or bypass preconditions, assessment, dry-run, validation, or audit.
     """
+    if isinstance(patchset, (str, bytes, bytearray)):
+        # The tool schema declares patchset through a "$ref", and clients that do not
+        # expand it serialize the argument as a JSON string. Rejecting that made every
+        # assess/dry-run/apply call from such a client fail with "patchset must be an
+        # object" even for a perfectly valid payload, so parse the string first.
+        try:
+            patchset = json.loads(patchset)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"patchset must be an object or a JSON object string: {exc}") from exc
+
     if not isinstance(patchset, dict):
         raise ValueError("patchset must be an object")
 

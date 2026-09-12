@@ -250,6 +250,8 @@ class WordAiMcpServer:
             "allow_paragraph_count_change": {"type": "boolean", "default": False},
             "allow_table_dimension_change": {"type": "boolean", "default": False},
             "allowed_added_content_control_tags": {"type": "array", "items": strp},
+            "use_audit": {"type": "boolean", "default": True},
+            "allow_skipped_isolation_checks": {"type": "boolean", "default": False},
         }
         specs = [
             ("docx_health_check", "Read-only. Conservative stability report: duplicate tags, complex content controls, fields, tracked changes, comments, table previews and recommended safety policy.", {"docx_path": strp, "max_items": {"type": "integer", "default": 50}}, ["docx_path"]),
@@ -298,8 +300,8 @@ class WordAiMcpServer:
             ("docx_restore_backup", "Write. Restore a backup to target_path.", {"backup_path": strp, "target_path": strp}, ["backup_path", "target_path"]),
             ("docx_rollback", "Write. Restore from backup and optionally back up replaced file first.", {"backup_path": strp, "restore_path": strp, "make_backup_of_current": {"type": "boolean", "default": True}}, ["backup_path", "restore_path"]),
             ("docx_apply_patchset", "Write. Apply constrained PatchSet to a new DOCX plus audit JSON; validation gates final commit. Defaults to the .NET Open XML backend when available.", {"docx_path": strp, "output_path": strp, "patchset": patchset, "engine": enginep}, ["docx_path", "patchset"]),
-            ("docx_validate", "Read-only. Validate structural invariants. Supply touched_* for intentional edits. Defaults to the .NET Open XML backend when available.", {**validate_props, "engine": enginep}, ["source_docx", "target_docx"]),
-            ("docx_compare_structure", "Read-only. Same validation report phrased as structural comparison. Defaults to the .NET Open XML backend when available.", {**validate_props, "engine": enginep}, ["source_docx", "target_docx"]),
+            ("docx_validate", "Read-only. Validate structural invariants. Touched scopes are loaded from the sibling '<target>.audit.json' written by docx_apply_patchset; do not hand-write touched_* unless you have no audit, and then always pass touched_para_ids and touched_paragraph_indices together. Defaults to the .NET Open XML backend when available.", {**validate_props, "engine": enginep}, ["source_docx", "target_docx"]),
+            ("docx_compare_structure", "Read-only. Same validation report phrased as structural comparison. Touched scopes are loaded from the sibling '<target>.audit.json' written by docx_apply_patchset. Defaults to the .NET Open XML backend when available.", {**validate_props, "engine": enginep}, ["source_docx", "target_docx"]),
             ("docx_text_diff", "Read-only. Unified visible-text diff for human review after validation.", {"source_docx": strp, "target_docx": strp, "context": {"type": "integer", "default": 2}}, ["source_docx", "target_docx"]),
             ("word_session_list", "Read-only. List active Office.js taskpane sessions registered by an open Word document.", {"include_inactive": {"type": "boolean", "default": False}}, []),
             ("word_session_snapshot", "Read-only. Return the latest content-control snapshot for an open Word session. If session_id is omitted, uses the most recently active session.", {"session_id": strp}, []),
@@ -495,74 +497,182 @@ class WordAiMcpServer:
             return dotnet_apply_patchset(docx_path, args["patchset"], output_path)
         return self._python_result(apply_patchset(docx_path, args["patchset"], output_path), detail)
 
-    def _validation_kwargs(self, args: JSON, target_docx: str | None = None) -> dict[str, Any]:
-        """Build validation kwargs and, when possible, auto-load touched scopes
-        from the adjacent audit JSON produced by docx_apply_patchset. This keeps
-        Codex validation ergonomic while preserving strict structure checks.
-        Explicit arguments always override audit-derived values.
+    _ISOLATION_REQUIRED = (
+        "docx_validate cannot prove that an edit stayed isolated without knowing what the edit "
+        "was supposed to touch: with no touched scopes supplied the deep protected_* checks are "
+        "skipped and a passing report would prove nothing. Do one of: "
+        "(a) validate a target produced by docx_apply_patchset and keep its sibling "
+        "'<target>.audit.json' in place - the touched scopes are then loaded automatically; "
+        "(b) pass touched_* explicitly, always supplying touched_para_ids AND "
+        "touched_paragraph_indices together, because the paraId and body-block checks read "
+        "different axes; or (c) pass allow_skipped_isolation_checks=true to run structural "
+        "package checks only and accept an inconclusive result."
+    )
+
+    def _validation_kwargs(self, args: JSON, target_docx: str | None = None) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        """Build validation kwargs and collect diagnostics about the isolation claim.
+
+        The touched scopes describe what the caller believes it edited; the validator
+        compares that claim against the two documents. Two things used to make a clean
+        edit look broken:
+
+        * An explicit touched_* argument suppressed the audit lookup entirely, so a caller
+          who passed a hand-written half of the claim silently replaced a correct one.
+          Explicit values are therefore merged into the audit-derived set, never used to
+          replace it.
+        * The isolation checks use two axes - paragraphs are matched by w14:paraId, body
+          blocks by paragraph index - and supplying only one of them leaves the other
+          check comparing against an empty set. Supplying only one is now reported.
+
+        The audit is also the only way the deep checks can run at all, so validating with
+        neither an audit nor an explicit claim is refused instead of silently returning a
+        green report that checked nothing.
         """
-        touched_tags = args.get("touched_content_control_tags") or []
-        touched_para_ids = args.get("touched_para_ids") or []
-        touched_paragraph_indices = args.get("touched_paragraph_indices") or []
-        touched_table_indices = args.get("touched_table_indices") or []
-        touched_table_cells = args.get("touched_table_cells") or []
-        allowed_added_tags = args.get("allowed_added_content_control_tags") or []
 
-        if target_docx and not (touched_tags or touched_para_ids or touched_paragraph_indices or touched_table_indices or touched_table_cells or allowed_added_tags) and args.get("use_audit", True):
-            audit_path = Path(target_docx).with_suffix(".audit.json")
-            if audit_path.exists():
+        def ints(values: Any) -> list[int]:
+            out: list[int] = []
+            for value in values or []:
                 try:
-                    audit = json.loads(audit_path.read_text(encoding="utf-8"))
-                    touched = ((audit.get("safety_assessment") or {}).get("touched") or {})
-                    touched_tags = touched.get("content_control_tags") or []
-                    touched_para_ids = touched.get("paraIds") or touched.get("para_ids") or []
-                    touched_paragraph_indices = touched.get("paragraph_indices") or []
-                    touched_table_indices = touched.get("table_indices") or []
-                    touched_table_cells = touched.get("table_cells") or []
-                    for op in audit.get("applied") or []:
-                        if op.get("paragraph_index") is not None:
-                            touched_paragraph_indices.append(op["paragraph_index"])
-                        if op.get("anchor_paragraph_index") is not None:
-                            touched_paragraph_indices.append(op["anchor_paragraph_index"])
-                        if op.get("target_paragraph_index") is not None:
-                            touched_paragraph_indices.append(op["target_paragraph_index"])
-                        if op.get("table_index") is not None and op.get("row") is not None and op.get("col") is not None:
-                            touched_table_cells.append(f"{op['table_index']}:{op['row']}:{op['col']}")
-                        if op.get("op") == "wrap_paragraph_with_content_control" and op.get("tag"):
-                            allowed_added_tags.append(op["tag"])
-                except Exception:
-                    pass
+                    out.append(int(value))
+                except (TypeError, ValueError):
+                    continue
+            return out
 
-        return {
-            "touched_content_control_tags": touched_tags,
-            "touched_para_ids": touched_para_ids,
-            "touched_paragraph_indices": sorted({int(x) for x in touched_paragraph_indices}),
-            "touched_table_indices": touched_table_indices,
-            "touched_table_cells": sorted({str(x) for x in touched_table_cells}),
+        explicit = {
+            "content_control_tags": [str(x) for x in (args.get("touched_content_control_tags") or [])],
+            "para_ids": [str(x) for x in (args.get("touched_para_ids") or [])],
+            "paragraph_indices": ints(args.get("touched_paragraph_indices")),
+            "table_indices": ints(args.get("touched_table_indices")),
+            "table_cells": [str(x) for x in (args.get("touched_table_cells") or [])],
+        }
+        explicit_supplied = sorted(k for k, v in explicit.items() if v)
+        allowed_added_tags = [str(x) for x in (args.get("allowed_added_content_control_tags") or [])]
+        notes: list[dict[str, str]] = []
+
+        audit_touched: dict[str, list[Any]] | None = None
+        audit_path = Path(target_docx).with_suffix(".audit.json") if target_docx else None
+        if audit_path and args.get("use_audit", True) and audit_path.exists():
+            try:
+                audit = json.loads(audit_path.read_text(encoding="utf-8"))
+                touched = ((audit.get("safety_assessment") or {}).get("touched") or {})
+                audit_touched = {
+                    "content_control_tags": [str(x) for x in (touched.get("content_control_tags") or [])],
+                    "para_ids": [str(x) for x in (touched.get("paraIds") or touched.get("para_ids") or [])],
+                    "paragraph_indices": ints(touched.get("paragraph_indices")),
+                    "table_indices": ints(touched.get("table_indices")),
+                    "table_cells": [str(x) for x in (touched.get("table_cells") or [])],
+                }
+                for op in audit.get("applied") or []:
+                    for key in ("paragraph_index", "anchor_paragraph_index", "target_paragraph_index"):
+                        if op.get(key) is not None:
+                            audit_touched["paragraph_indices"].append(int(op[key]))
+                    if op.get("table_index") is not None and op.get("row") is not None and op.get("col") is not None:
+                        audit_touched["table_cells"].append(f"{op['table_index']}:{op['row']}:{op['col']}")
+                    if op.get("op") == "wrap_paragraph_with_content_control" and op.get("tag"):
+                        allowed_added_tags.append(op["tag"])
+            except Exception:
+                audit_touched = None
+
+        merged = {
+            key: sorted(set(explicit[key]) | set(audit_touched[key] if audit_touched else []))
+            for key in explicit
+        }
+
+        if audit_touched is not None and explicit_supplied:
+            notes.append({
+                "severity": "warning",
+                "code": "touched_merged_with_audit",
+                "message": (
+                    f"Explicit touched_* ({', '.join(explicit_supplied)}) was merged with the audit "
+                    f"at {audit_path.name} instead of replacing it, because the isolation checks need "
+                    "both the paraId and the paragraph-index axes."
+                ),
+            })
+        elif explicit_supplied and audit_touched is None:
+            only_para_ids = bool(explicit["para_ids"]) and not explicit["paragraph_indices"]
+            only_indices = bool(explicit["paragraph_indices"]) and not explicit["para_ids"]
+            if only_para_ids or only_indices:
+                missing = "touched_paragraph_indices" if only_para_ids else "touched_para_ids"
+                notes.append({
+                    "severity": "warning",
+                    "code": "touched_sets_incomplete",
+                    "message": (
+                        f"Only one axis of the isolation claim was supplied and no audit was found; "
+                        f"{missing} is empty. Paragraphs are matched by paraId while body blocks are "
+                        "matched by paragraph index, so a single-axis claim makes the other check "
+                        "report protected_* errors on a correct edit."
+                    ),
+                })
+
+        if not any(merged.values()):
+            if not bool(args.get("allow_skipped_isolation_checks", False)):
+                raise ValueError(self._ISOLATION_REQUIRED)
+            notes.append({
+                "severity": "warning",
+                "code": "isolation_checks_skipped",
+                "message": "Isolation checks were skipped on request: no touched scopes supplied, so only structural package checks ran and the result is inconclusive.",
+            })
+
+        kwargs = {
+            "touched_content_control_tags": merged["content_control_tags"],
+            "touched_para_ids": merged["para_ids"],
+            "touched_paragraph_indices": merged["paragraph_indices"],
+            "touched_table_indices": merged["table_indices"],
+            "touched_table_cells": merged["table_cells"],
             "allow_paragraph_count_change": bool(args.get("allow_paragraph_count_change", False)),
             "allow_table_dimension_change": bool(args.get("allow_table_dimension_change", False)),
-            "allowed_added_content_control_tags": allowed_added_tags,
+            "allowed_added_content_control_tags": sorted(set(allowed_added_tags)),
         }
+        return kwargs, notes
+
+    @staticmethod
+    def _annotate_isolation(result: Any, kwargs: JSON, notes: list[dict[str, str]]) -> Any:
+        """Publish how the isolation claim was obtained and attach its diagnostics."""
+        if not isinstance(result, dict):
+            return result
+        result["isolation_checks"] = "performed" if any(
+            kwargs.get(key) for key in (
+                "touched_content_control_tags",
+                "touched_para_ids",
+                "touched_paragraph_indices",
+                "touched_table_indices",
+                "touched_table_cells",
+            )
+        ) else "skipped"
+        result["touched_scopes"] = {
+            "content_control_tags": kwargs["touched_content_control_tags"],
+            "para_ids": kwargs["touched_para_ids"],
+            "paragraph_indices": kwargs["touched_paragraph_indices"],
+            "table_indices": kwargs["touched_table_indices"],
+            "table_cells": kwargs["touched_table_cells"],
+        }
+        if notes:
+            issues = result.setdefault("issues", [])
+            existing = {(i.get("code"), i.get("message")) for i in issues if isinstance(i, dict)}
+            for note in notes:
+                if (note["code"], note["message"]) not in existing:
+                    issues.append(note)
+        return result
 
     def tool_docx_validate(self, args: JSON) -> Any:
         source = self._resolve_path(args["source_docx"])
         target = self._resolve_path(args["target_docx"])
-        kwargs = self._validation_kwargs(args, target)
+        kwargs, notes = self._validation_kwargs(args, target)
         strict = bool(args.get("strict", True))
         engine, detail = self._offline_engine(args)
         if engine == "dotnet":
-            return dotnet_validate(source, target, strict, kwargs)
-        return self._python_result(validate_structure(source, target, strict, **kwargs).to_dict(), detail)
+            return self._annotate_isolation(dotnet_validate(source, target, strict, kwargs), kwargs, notes)
+        return self._annotate_isolation(self._python_result(validate_structure(source, target, strict, **kwargs).to_dict(), detail), kwargs, notes)
 
     def tool_docx_compare_structure(self, args: JSON) -> Any:
         source = self._resolve_path(args["source_docx"])
         target = self._resolve_path(args["target_docx"])
-        kwargs = self._validation_kwargs(args, target)
+        kwargs, notes = self._validation_kwargs(args, target)
         strict = bool(args.get("strict", True))
         engine, detail = self._offline_engine(args)
         if engine == "dotnet":
-            return dotnet_validate(source, target, strict, kwargs)
-        return self._python_result(validate_structure(source, target, strict, **kwargs).to_dict(), detail)
+            return self._annotate_isolation(dotnet_validate(source, target, strict, kwargs), kwargs, notes)
+        return self._annotate_isolation(self._python_result(validate_structure(source, target, strict, **kwargs).to_dict(), detail), kwargs, notes)
 
     def tool_docx_text_diff(self, args: JSON) -> Any:
         return diff_text(self._resolve_path(args["source_docx"]), self._resolve_path(args["target_docx"]), int(args.get("context", 2)))
